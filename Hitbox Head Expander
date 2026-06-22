@@ -13,7 +13,7 @@ if oldGui then
 end
 
 local MIN_SIZE = 1
-local MAX_SIZE = 20
+local MAX_SIZE = 50
 local STEP_SIZE = 1
 
 local DEFAULT_WALK_SPEED = 16
