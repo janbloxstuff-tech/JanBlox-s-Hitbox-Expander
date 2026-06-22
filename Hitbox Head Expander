@@ -17,11 +17,15 @@ local MAX_SIZE = 20
 local STEP_SIZE = 1
 
 local state = {
-	playerHitbox = false,
-	npcHitbox = false,
+	hitboxesEnabled = false,
 	playerESP = false,
 	npcESP = false,
+	highlightESP = false,
+	boxESP = false,
 	size = 4,
+	walkSpeed = 16,
+	jumpPower = 50,
+	guiVisible = true,
 }
 
 _G.HeadSize = state.size
@@ -32,6 +36,11 @@ local trackedPlayers = {}
 local trackedNPCs = {}
 local modelInfo = {}
 local espCache = {}
+local boxCache = {}
+
+local function isMobile()
+	return UserInputService.TouchEnabled and not UserInputService.MouseEnabled
+end
 
 local function isEnemyPlayer(player)
 	if not player or player == LocalPlayer then
@@ -47,6 +56,14 @@ end
 
 local function clampSize(value)
 	return math.clamp(value, MIN_SIZE, MAX_SIZE)
+end
+
+local function clampWalkSpeed(value)
+	return math.clamp(value, 4, 80)
+end
+
+local function clampJumpPower(value)
+	return math.clamp(value, 0, 150)
 end
 
 local function getHead(model)
@@ -65,6 +82,42 @@ local function getHumanoid(model)
 		return nil
 	end
 	return model:FindFirstChildOfClass("Humanoid")
+end
+
+local function getRootPart(model)
+	if not model then
+		return nil
+	end
+	local root = model:FindFirstChild("HumanoidRootPart")
+	if root and root:IsA("BasePart") then
+		return root
+	end
+	root = model.PrimaryPart
+	if root and root:IsA("BasePart") then
+		return root
+	end
+	for _, inst in ipairs(model:GetChildren()) do
+		if inst:IsA("BasePart") then
+			return inst
+		end
+	end
+	return nil
+end
+
+local function isDeadHumanoid(humanoid)
+	if not humanoid then
+		return true
+	end
+	if humanoid.Health <= 0 then
+		return true
+	end
+	local ok, state = pcall(function()
+		return humanoid:GetState()
+	end)
+	if ok and state == Enum.HumanoidStateType.Dead then
+		return true
+	end
+	return false
 end
 
 local function saveOriginal(part)
@@ -107,6 +160,22 @@ local function destroyEsp(model)
 	if gui then
 		gui:Destroy()
 		espCache[model] = nil
+	end
+end
+
+local function destroyHighlight(model)
+	local info = modelInfo[model]
+	if info and info.highlight then
+		info.highlight:Destroy()
+		info.highlight = nil
+	end
+end
+
+local function destroyBox(model)
+	local info = modelInfo[model]
+	if info and info.box then
+		info.box:Destroy()
+		info.box = nil
 	end
 end
 
@@ -188,6 +257,8 @@ local function cleanupModel(model)
 
 	applyHumanoidNameVisibility(model, false)
 	destroyEsp(model)
+	destroyHighlight(model)
+	destroyBox(model)
 
 	if info.connections then
 		for _, conn in ipairs(info.connections) do
@@ -263,31 +334,66 @@ local function makeBillboard(model, adornee, titleText, healthText)
 	return billboard, nameLabel, hpLabel
 end
 
-local function updateEsp(model)
+local function makeHighlight(model)
+	local hl = Instance.new("Highlight")
+	hl.Name = "JanBloxHighlight"
+	hl.Adornee = model
+	hl.FillTransparency = 0.6
+	hl.OutlineTransparency = 0
+	hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+	hl.Parent = model
+	return hl
+end
+
+local function makeBox(model)
+	local root = getRootPart(model)
+	if not root then
+		return nil
+	end
+
+	local box = Instance.new("BoxHandleAdornment")
+	box.Name = "JanBlox2DBox"
+	box.Adornee = root
+	box.AlwaysOnTop = true
+	box.ZIndex = 10
+	box.Transparency = 0.7
+	box.Color3 = Color3.fromRGB(255, 255, 255)
+	box.Size = model:GetExtentsSize()
+	box.Parent = Workspace
+	return box
+end
+
+local function updateVisuals(model)
 	local info = modelInfo[model]
 	if not info then
 		return
 	end
 
-	local humanoid = getHumanoid(model)
+	local humanoid = info.humanoid or getHumanoid(model)
+	info.humanoid = humanoid
+
 	local head = info.head or getHead(model)
+	local root = getRootPart(model)
 
 	if info.isPlayer then
-		if not state.playerESP or not info.player or not isEnemyPlayer(info.player) then
+		if not (state.playerESP and info.player and isEnemyPlayer(info.player)) then
+			applyHumanoidNameVisibility(model, false)
 			destroyEsp(model)
+			destroyHighlight(model)
+			destroyBox(model)
 			return
 		end
 	else
 		if not state.npcESP then
+			applyHumanoidNameVisibility(model, false)
 			destroyEsp(model)
+			destroyHighlight(model)
+			destroyBox(model)
 			return
 		end
 	end
 
-	if not head then
-		destroyEsp(model)
-		return
-	end
+	applyHumanoidNameVisibility(model, true)
 
 	local nameText
 	if info.isPlayer and info.player then
@@ -296,25 +402,57 @@ local function updateEsp(model)
 		nameText = model.Name
 	end
 
-	local healthText = "Health: ?"
-	if humanoid then
+	local dead = isDeadHumanoid(humanoid)
+	local healthText = "Dead"
+
+	if not dead and humanoid then
 		local currentHealth = math.max(0, math.floor(humanoid.Health + 0.5))
 		local maxHealth = math.max(1, math.floor(humanoid.MaxHealth + 0.5))
 		healthText = ("Health: %d/%d"):format(currentHealth, maxHealth)
 	end
 
-	local gui = espCache[model]
-	if not gui or not gui.Parent then
-		gui, info.nameLabel, info.hpLabel = makeBillboard(model, head, nameText, healthText)
-		espCache[model] = gui
-	else
-		gui.Adornee = head
-		gui.Parent = head
-		if info.nameLabel then
-			info.nameLabel.Text = nameText
+	if head then
+		local gui = espCache[model]
+		if not gui or not gui.Parent then
+			gui, info.nameLabel, info.hpLabel = makeBillboard(model, head, nameText, healthText)
+			espCache[model] = gui
+		else
+			gui.Adornee = head
+			gui.Parent = head
+			if info.nameLabel then
+				info.nameLabel.Text = nameText
+			end
+			if info.hpLabel then
+				info.hpLabel.Text = healthText
+			end
 		end
-		if info.hpLabel then
-			info.hpLabel.Text = healthText
+	else
+		destroyEsp(model)
+	end
+
+	if dead then
+		destroyHighlight(model)
+		destroyBox(model)
+	else
+		if state.highlightESP then
+			if not info.highlight or not info.highlight.Parent then
+				info.highlight = makeHighlight(model)
+			else
+				info.highlight.Adornee = model
+			end
+		else
+			destroyHighlight(model)
+		end
+
+		if state.boxESP and root then
+			if not info.box or not info.box.Parent then
+				info.box = makeBox(model)
+			else
+				info.box.Adornee = root
+				info.box.Size = model:GetExtentsSize()
+			end
+		else
+			destroyBox(model)
 		end
 	end
 end
@@ -327,30 +465,25 @@ local function applyModelEffects(model)
 
 	local head = info.head or getHead(model)
 	info.head = head
+	info.humanoid = info.humanoid or getHumanoid(model)
 
-	if info.isPlayer then
-		applyHumanoidNameVisibility(model, state.playerESP and info.player and isEnemyPlayer(info.player) or false)
-
-		if head then
-			if state.playerHitbox and info.player and isEnemyPlayer(info.player) then
-				applyHitboxToHead(head)
+	if head then
+		if state.hitboxesEnabled then
+			if info.isPlayer then
+				if info.player and isEnemyPlayer(info.player) then
+					applyHitboxToHead(head)
+				else
+					restorePart(head)
+				end
 			else
-				restorePart(head)
-			end
-		end
-	else
-		applyHumanoidNameVisibility(model, state.npcESP)
-
-		if head then
-			if state.npcHitbox then
 				applyHitboxToHead(head)
-			else
-				restorePart(head)
 			end
+		else
+			restorePart(head)
 		end
 	end
 
-	updateEsp(model)
+	updateVisuals(model)
 end
 
 local function watchModel(model, isPlayer, player)
@@ -364,6 +497,8 @@ local function watchModel(model, isPlayer, player)
 		head = nil,
 		humanoid = getHumanoid(model),
 		humanoidNameCache = nil,
+		highlight = nil,
+		box = nil,
 		connections = {},
 		nameLabel = nil,
 		hpLabel = nil,
@@ -385,6 +520,15 @@ local function watchModel(model, isPlayer, player)
 	table.insert(info.connections, model.ChildAdded:Connect(function(child)
 		if child.Name == "Head" and child:IsA("BasePart") then
 			refreshHead()
+		elseif child:IsA("Humanoid") then
+			info.humanoid = child
+			table.insert(info.connections, child.HealthChanged:Connect(function()
+				updateVisuals(model)
+			end))
+			table.insert(info.connections, child.Died:Connect(function()
+				updateVisuals(model)
+			end))
+			refreshHead()
 		end
 	end))
 
@@ -397,11 +541,11 @@ local function watchModel(model, isPlayer, player)
 	local humanoid = info.humanoid
 	if humanoid then
 		table.insert(info.connections, humanoid.HealthChanged:Connect(function()
-			updateEsp(model)
+			updateVisuals(model)
 		end))
 
 		table.insert(info.connections, humanoid.Died:Connect(function()
-			updateEsp(model)
+			updateVisuals(model)
 		end))
 	end
 
@@ -466,14 +610,6 @@ local function setupNPCModel(model)
 
 	trackedNPCs[model] = true
 	watchModel(model, false, nil)
-
-	table.insert(modelInfo[model].connections, humanoid.HealthChanged:Connect(function()
-		updateEsp(model)
-	end))
-
-	table.insert(modelInfo[model].connections, humanoid.Died:Connect(function()
-		updateEsp(model)
-	end))
 end
 
 local function refreshAll()
@@ -482,6 +618,7 @@ local function refreshAll()
 			local info = modelInfo[player.Character]
 			if info then
 				info.head = getHead(player.Character) or info.head
+				info.humanoid = info.humanoid or getHumanoid(player.Character)
 				applyModelEffects(player.Character)
 			end
 		end
@@ -492,6 +629,7 @@ local function refreshAll()
 			local info = modelInfo[model]
 			if info then
 				info.head = getHead(model) or info.head
+				info.humanoid = info.humanoid or getHumanoid(model)
 				applyModelEffects(model)
 			end
 		end
@@ -535,11 +673,11 @@ screenGui.Parent = PlayerGui
 
 local main = Instance.new("Frame")
 main.Name = "Main"
-main.Size = UDim2.new(0, 300, 0, 320)
-main.Position = UDim2.new(0.5, -150, 0.5, -160)
+main.Size = UDim2.new(0, 300, 0, 390)
+main.Position = UDim2.new(0.5, -150, 0.5, -195)
 main.BackgroundColor3 = Color3.fromRGB(24, 24, 24)
 main.BorderSizePixel = 0
-main.ClipsDescendants = false
+main.Visible = true
 main.Parent = screenGui
 
 local mainCorner = Instance.new("UICorner")
@@ -611,58 +749,6 @@ UserInputService.InputChanged:Connect(function(input)
 			startPos.Y.Scale,
 			startPos.Y.Offset + delta.Y
 		)
-	end
-end)
-
-local resizeActive = false
-local resizeStart
-local startSize
-
-local resizeHandle = Instance.new("Frame")
-resizeHandle.Name = "ResizeHandle"
-resizeHandle.Size = UDim2.new(0, 18, 0, 18)
-resizeHandle.AnchorPoint = Vector2.new(1, 1)
-resizeHandle.Position = UDim2.new(1, -2, 1, -2)
-resizeHandle.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
-resizeHandle.BorderSizePixel = 0
-resizeHandle.Parent = main
-
-local resizeCorner = Instance.new("UICorner")
-resizeCorner.CornerRadius = UDim.new(0, 4)
-resizeCorner.Parent = resizeHandle
-
-local resizeStroke = Instance.new("UIStroke")
-resizeStroke.Thickness = 1
-resizeStroke.Transparency = 0.45
-resizeStroke.Parent = resizeHandle
-
-resizeHandle.Active = true
-resizeHandle.InputBegan:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-		resizeActive = true
-		resizeStart = input.Position
-		startSize = main.Size
-
-		input.Changed:Connect(function()
-			if input.UserInputState == Enum.UserInputState.End then
-				resizeActive = false
-			end
-		end)
-	end
-end)
-
-UserInputService.InputChanged:Connect(function(input)
-	if not resizeActive then
-		return
-	end
-
-	if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
-		local delta = input.Position - resizeStart
-
-		local newWidth = math.clamp(startSize.X.Offset + delta.X, 280, 700)
-		local newHeight = math.clamp(startSize.Y.Offset + delta.Y, 240, 700)
-
-		main.Size = UDim2.new(0, newWidth, 0, newHeight)
 	end
 end)
 
@@ -746,20 +832,46 @@ local function makeSmallButton(parent, text)
 	return button
 end
 
+local function applyMovementSettings()
+	local character = LocalPlayer.Character
+	if not character then
+		return
+	end
+
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if not humanoid then
+		return
+	end
+
+	pcall(function()
+		humanoid.WalkSpeed = state.walkSpeed
+	end)
+
+	pcall(function()
+		humanoid.UseJumpPower = true
+	end)
+
+	pcall(function()
+		humanoid.JumpPower = state.jumpPower
+	end)
+end
+
+LocalPlayer.CharacterAdded:Connect(function()
+	task.wait(0.1)
+	applyMovementSettings()
+end)
+
 local hitboxSection = sectionLabel("Hitbox Configuration")
 hitboxSection.LayoutOrder = 1
 
-local hitboxPlayerBtn = makeButton("Toggle Player Hitbox: OFF")
-hitboxPlayerBtn.LayoutOrder = 2
-
-local hitboxNpcBtn = makeButton("Toggle NPC Hitbox: OFF")
-hitboxNpcBtn.LayoutOrder = 3
+local toggleHitboxesBtn = makeButton("Toggle Hitboxes: OFF")
+toggleHitboxesBtn.LayoutOrder = 2
 
 local sizeRow = Instance.new("Frame")
 sizeRow.Size = UDim2.new(1, 0, 0, 34)
 sizeRow.BackgroundTransparency = 1
 sizeRow.Parent = content
-sizeRow.LayoutOrder = 4
+sizeRow.LayoutOrder = 3
 
 local sizeLayout = Instance.new("UIListLayout")
 sizeLayout.FillDirection = Enum.FillDirection.Horizontal
@@ -791,31 +903,112 @@ plusBtn.Size = UDim2.new(0, 60, 1, 0)
 plusBtn.LayoutOrder = 3
 
 local espSection = sectionLabel("ESP Configuration")
-espSection.LayoutOrder = 5
+espSection.LayoutOrder = 4
 
 local espPlayerBtn = makeButton("Toggle Player ESP: OFF")
-espPlayerBtn.LayoutOrder = 6
+espPlayerBtn.LayoutOrder = 5
 
 local espNpcBtn = makeButton("Toggle NPC ESP: OFF")
-espNpcBtn.LayoutOrder = 7
+espNpcBtn.LayoutOrder = 6
+
+local highlightBtn = makeButton("Toggle Highlight: OFF")
+highlightBtn.LayoutOrder = 7
+
+local boxBtn = makeButton("Toggle 2D Boxes: OFF")
+boxBtn.LayoutOrder = 8
+
+local playerSection = sectionLabel("Player Configuration")
+playerSection.LayoutOrder = 9
+
+local speedRow = Instance.new("Frame")
+speedRow.Size = UDim2.new(1, 0, 0, 34)
+speedRow.BackgroundTransparency = 1
+speedRow.Parent = content
+speedRow.LayoutOrder = 10
+
+local speedLayout = Instance.new("UIListLayout")
+speedLayout.FillDirection = Enum.FillDirection.Horizontal
+speedLayout.SortOrder = Enum.SortOrder.LayoutOrder
+speedLayout.Padding = UDim.new(0, 6)
+speedLayout.Parent = speedRow
+
+local speedMinus = makeSmallButton(speedRow, "Speed -")
+speedMinus.Size = UDim2.new(0, 70, 1, 0)
+speedMinus.LayoutOrder = 1
+
+local speedLabel = Instance.new("TextLabel")
+speedLabel.Size = UDim2.new(1, -150, 1, 0)
+speedLabel.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+speedLabel.BorderSizePixel = 0
+speedLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+speedLabel.Font = Enum.Font.GothamBold
+speedLabel.TextSize = 14
+speedLabel.Text = "WalkSpeed: 16"
+speedLabel.Parent = speedRow
+speedLabel.LayoutOrder = 2
+
+local speedCorner = Instance.new("UICorner")
+speedCorner.CornerRadius = UDim.new(0, 6)
+speedCorner.Parent = speedLabel
+
+local speedPlus = makeSmallButton(speedRow, "Speed +")
+speedPlus.Size = UDim2.new(0, 70, 1, 0)
+speedPlus.LayoutOrder = 3
+
+local jumpRow = Instance.new("Frame")
+jumpRow.Size = UDim2.new(1, 0, 0, 34)
+jumpRow.BackgroundTransparency = 1
+jumpRow.Parent = content
+jumpRow.LayoutOrder = 11
+
+local jumpLayout = Instance.new("UIListLayout")
+jumpLayout.FillDirection = Enum.FillDirection.Horizontal
+jumpLayout.SortOrder = Enum.SortOrder.LayoutOrder
+jumpLayout.Padding = UDim.new(0, 6)
+jumpLayout.Parent = jumpRow
+
+local jumpMinus = makeSmallButton(jumpRow, "Jump -")
+jumpMinus.Size = UDim2.new(0, 70, 1, 0)
+jumpMinus.LayoutOrder = 1
+
+local jumpLabel = Instance.new("TextLabel")
+jumpLabel.Size = UDim2.new(1, -150, 1, 0)
+jumpLabel.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+jumpLabel.BorderSizePixel = 0
+jumpLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+jumpLabel.Font = Enum.Font.GothamBold
+jumpLabel.TextSize = 14
+jumpLabel.Text = "JumpPower: 50"
+jumpLabel.Parent = jumpRow
+jumpLabel.LayoutOrder = 2
+
+local jumpCorner = Instance.new("UICorner")
+jumpCorner.CornerRadius = UDim.new(0, 6)
+jumpCorner.Parent = jumpLabel
+
+local jumpPlus = makeSmallButton(jumpRow, "Jump +")
+jumpPlus.Size = UDim2.new(0, 70, 1, 0)
+jumpPlus.LayoutOrder = 3
 
 local function refreshUI()
-	hitboxPlayerBtn.Text = "Toggle Player Hitbox: " .. (state.playerHitbox and "ON" or "OFF")
-	hitboxNpcBtn.Text = "Toggle NPC Hitbox: " .. (state.npcHitbox and "ON" or "OFF")
+	toggleHitboxesBtn.Text = "Toggle Hitboxes: " .. (state.hitboxesEnabled and "ON" or "OFF")
 	espPlayerBtn.Text = "Toggle Player ESP: " .. (state.playerESP and "ON" or "OFF")
 	espNpcBtn.Text = "Toggle NPC ESP: " .. (state.npcESP and "ON" or "OFF")
+	highlightBtn.Text = "Toggle Highlight: " .. (state.highlightESP and "ON" or "OFF")
+	boxBtn.Text = "Toggle 2D Boxes: " .. (state.boxESP and "ON" or "OFF")
 	sizeLabel.Text = "Size: " .. tostring(state.size) .. " / " .. tostring(MAX_SIZE)
+	speedLabel.Text = "WalkSpeed: " .. tostring(state.walkSpeed)
+	jumpLabel.Text = "JumpPower: " .. tostring(state.jumpPower)
 	updateCanvas()
 end
 
-hitboxPlayerBtn.MouseButton1Click:Connect(function()
-	state.playerHitbox = not state.playerHitbox
-	refreshUI()
-	refreshAll()
-end)
+local function setMainVisible(visible)
+	state.guiVisible = visible
+	main.Visible = visible
+end
 
-hitboxNpcBtn.MouseButton1Click:Connect(function()
-	state.npcHitbox = not state.npcHitbox
+toggleHitboxesBtn.MouseButton1Click:Connect(function()
+	state.hitboxesEnabled = not state.hitboxesEnabled
 	refreshUI()
 	refreshAll()
 end)
@@ -828,6 +1021,18 @@ end)
 
 espNpcBtn.MouseButton1Click:Connect(function()
 	state.npcESP = not state.npcESP
+	refreshUI()
+	refreshAll()
+end)
+
+highlightBtn.MouseButton1Click:Connect(function()
+	state.highlightESP = not state.highlightESP
+	refreshUI()
+	refreshAll()
+end)
+
+boxBtn.MouseButton1Click:Connect(function()
+	state.boxESP = not state.boxESP
 	refreshUI()
 	refreshAll()
 end)
@@ -848,8 +1053,109 @@ plusBtn.MouseButton1Click:Connect(function()
 	refreshAll()
 end)
 
+speedMinus.MouseButton1Click:Connect(function()
+	state.walkSpeed = clampWalkSpeed(state.walkSpeed - 1)
+	applyMovementSettings()
+	refreshUI()
+end)
+
+speedPlus.MouseButton1Click:Connect(function()
+	state.walkSpeed = clampWalkSpeed(state.walkSpeed + 1)
+	applyMovementSettings()
+	refreshUI()
+end)
+
+jumpMinus.MouseButton1Click:Connect(function()
+	state.jumpPower = clampJumpPower(state.jumpPower - 5)
+	applyMovementSettings()
+	refreshUI()
+end)
+
+jumpPlus.MouseButton1Click:Connect(function()
+	state.jumpPower = clampJumpPower(state.jumpPower + 5)
+	applyMovementSettings()
+	refreshUI()
+end)
+
+if isMobile() then
+	local toggleButton = Instance.new("TextButton")
+	toggleButton.Name = "OpenCloseButton"
+	toggleButton.Size = UDim2.new(0, 120, 0, 40)
+	toggleButton.Position = UDim2.new(0, 16, 0.65, 0)
+	toggleButton.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+	toggleButton.BorderSizePixel = 0
+	toggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+	toggleButton.Font = Enum.Font.GothamBold
+	toggleButton.TextSize = 15
+	toggleButton.Text = "Open / Close"
+	toggleButton.Parent = screenGui
+
+	local toggleCorner = Instance.new("UICorner")
+	toggleCorner.CornerRadius = UDim.new(0, 8)
+	toggleCorner.Parent = toggleButton
+
+	local toggleStroke = Instance.new("UIStroke")
+	toggleStroke.Thickness = 1
+	toggleStroke.Transparency = 0.4
+	toggleStroke.Parent = toggleButton
+
+	local mobileDrag = false
+	local dragStartPos
+	local dragStartButtonPos
+
+	toggleButton.Active = true
+	toggleButton.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+			mobileDrag = true
+			dragStartPos = input.Position
+			dragStartButtonPos = toggleButton.Position
+
+			input.Changed:Connect(function()
+				if input.UserInputState == Enum.UserInputState.End then
+					mobileDrag = false
+				end
+			end)
+		end
+	end)
+
+	UserInputService.InputChanged:Connect(function(input)
+		if not mobileDrag then
+			return
+		end
+
+		if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseMovement then
+			local delta = input.Position - dragStartPos
+			toggleButton.Position = UDim2.new(
+				dragStartButtonPos.X.Scale,
+				dragStartButtonPos.X.Offset + delta.X,
+				dragStartButtonPos.Y.Scale,
+				dragStartButtonPos.Y.Offset + delta.Y
+			)
+		end
+	end)
+
+	toggleButton.MouseButton1Click:Connect(function()
+		setMainVisible(not main.Visible)
+	end)
+end
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed then
+		return
+	end
+
+	if input.KeyCode == Enum.KeyCode.K then
+		setMainVisible(not main.Visible)
+	elseif input.KeyCode == Enum.KeyCode.L then
+		state.hitboxesEnabled = not state.hitboxesEnabled
+		refreshUI()
+		refreshAll()
+	end
+end)
+
 refreshUI()
 refreshAll()
+applyMovementSettings()
 
 task.spawn(function()
 	while screenGui.Parent do
@@ -857,7 +1163,7 @@ task.spawn(function()
 		refreshAll()
 		for model, info in pairs(modelInfo) do
 			if model and model.Parent and info then
-				updateEsp(model)
+				updateVisuals(model)
 			end
 		end
 	end
