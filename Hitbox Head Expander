@@ -18,7 +18,7 @@ local STEP_SIZE = 1
 
 local DEFAULT_WALK_SPEED = 16
 local DEFAULT_JUMP_POWER = 50
-local LAY_DOWN_OFFSET = 1.25
+local LAY_DOWN_OFFSET = 1.5
 
 local state = {
 	hitboxesEnabled = false,
