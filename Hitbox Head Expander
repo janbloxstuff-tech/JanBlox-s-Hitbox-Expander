@@ -54,6 +54,7 @@ local trackedPlayers = {}
 local trackedNPCs = {}
 local modelInfo = {}
 local espCache = {}
+state.isBanging = false
 
 local function isMobile()
 	return UserInputService.TouchEnabled and not UserInputService.MouseEnabled
@@ -1151,25 +1152,6 @@ layDownBtn.LayoutOrder = 18
 local bangBtn = makeButton("Bang: OFF")
 bangBtn.LayoutOrder = 19
 
-local function refreshUI()
-	toggleHitboxesBtn.Text = "Toggle Hitboxes: " .. (state.hitboxesEnabled and "ON" or "OFF")
-	playerHitboxBtn.Text = "Toggle Player Hitbox: " .. (state.playerHitbox and "ON" or "OFF")
-	npcHitboxBtn.Text = "Toggle NPC Hitbox: " .. (state.npcHitbox and "ON" or "OFF")
-	forceFieldBtn.Text = "Toggle ForceField: " .. (state.forceFieldHitbox and "ON" or "OFF")
-
-	espPlayerBtn.Text = "Toggle Player ESP: " .. (state.playerESP and "ON" or "OFF")
-	espNpcBtn.Text = "Toggle NPC ESP: " .. (state.npcESP and "ON" or "OFF")
-	highlightBtn.Text = "Toggle Highlight: " .. (state.highlightESP and "ON" or "OFF")
-	boxBtn.Text = "Toggle 2D Boxes: " .. (state.boxESP and "ON" or "OFF")
-
-	sizeLabel.Text = "Size: " .. tostring(state.size) .. " / " .. tostring(MAX_SIZE)
-	speedLabel.Text = "WalkSpeed: " .. tostring(state.walkSpeed)
-	jumpLabel.Text = "JumpPower: " .. tostring(state.jumpPower)
-	layDownBtn.Text = "Lay Down: " .. (state.layDown and "ON" or "OFF")
-
-	updateCanvas()
-end
-
 local function applyMovementToCurrentCharacter()
 	local character = LocalPlayer.Character
 	if character then
@@ -1290,6 +1272,13 @@ resetMovementBtn.MouseButton1Click:Connect(function()
 	refreshUI()
 end)
 
+layDownBtn.MouseButton1Click:Connect(function()
+	state.layDown = not state.layDown
+	applyMovementToCurrentCharacter()
+	refreshUI()
+	refreshAll()
+end)
+
 bangBtn.MouseButton1Click:Connect(function()
     if not state.isBanging then
         performBang()
@@ -1300,12 +1289,31 @@ bangBtn.MouseButton1Click:Connect(function()
     end
 end)
 
-layDownBtn.MouseButton1Click:Connect(function()
-	state.layDown = not state.layDown
-	applyMovementToCurrentCharacter()
-	refreshUI()
-	refreshAll()
-end)
+local function refreshUI()
+	-- Hitboxes
+	toggleHitboxesBtn.Text = "Toggle Hitboxes: " .. (state.hitboxesEnabled and "ON" or "OFF")
+	playerHitboxBtn.Text = "Toggle Player Hitbox: " .. (state.playerHitbox and "ON" or "OFF")
+	npcHitboxBtn.Text = "Toggle NPC Hitbox: " .. (state.npcHitbox and "ON" or "OFF")
+	forceFieldBtn.Text = "Toggle ForceField: " .. (state.forceFieldHitbox and "ON" or "OFF")
+
+	-- New ESP/Highlight/Box Buttons
+	espPlayerBtn.Text = "Player ESP: " .. (state.playerESP and "ON" or "OFF")
+	playerHighlightBtn.Text = "Player Highlight: " .. (state.playerHighlight and "ON" or "OFF")
+	playerBoxBtn.Text = "Player Boxes: " .. (state.playerBox and "ON" or "OFF")
+	
+	espNpcBtn.Text = "NPC ESP: " .. (state.npcESP and "ON" or "OFF")
+	npcHighlightBtn.Text = "NPC Highlight: " .. (state.npcHighlight and "ON" or "OFF")
+	npcBoxBtn.Text = "NPC Boxes: " .. (state.npcBox and "ON" or "OFF")
+
+	-- Misc
+	sizeLabel.Text = "Size: " .. tostring(state.size) .. " / " .. tostring(MAX_SIZE)
+	speedLabel.Text = "WalkSpeed: " .. tostring(state.walkSpeed)
+	jumpLabel.Text = "JumpPower: " .. tostring(state.jumpPower)
+	layDownBtn.Text = "Lay Down: " .. (state.layDown and "ON" or "OFF")
+	bangBtn.Text = "Bang: " .. (state.isBanging and "ON" or "OFF")
+
+	updateCanvas()
+end
 
 if isMobile() then
 	local toggleButton = Instance.new("TextButton")
