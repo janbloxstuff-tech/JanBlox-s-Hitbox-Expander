@@ -1,0 +1,864 @@
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local UserInputService = game:GetService("UserInputService")
+
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+local GUI_NAME = "JanBlox's Gui"
+
+local oldGui = PlayerGui:FindFirstChild(GUI_NAME)
+if oldGui then
+	oldGui:Destroy()
+end
+
+local MIN_SIZE = 1
+local MAX_SIZE = 20
+local STEP_SIZE = 1
+
+local state = {
+	playerHitbox = false,
+	npcHitbox = false,
+	playerESP = false,
+	npcESP = false,
+	size = 4,
+}
+
+_G.HeadSize = state.size
+_G.RootSize = state.size
+
+local originalParts = {}
+local trackedPlayers = {}
+local trackedNPCs = {}
+local modelInfo = {}
+local espCache = {}
+
+local function isEnemyPlayer(player)
+	if not player or player == LocalPlayer then
+		return false
+	end
+
+	if LocalPlayer.Team ~= nil and player.Team ~= nil and LocalPlayer.Team == player.Team then
+		return false
+	end
+
+	return true
+end
+
+local function clampSize(value)
+	return math.clamp(value, MIN_SIZE, MAX_SIZE)
+end
+
+local function getHead(model)
+	if not model then
+		return nil
+	end
+	local head = model:FindFirstChild("Head")
+	if head and head:IsA("BasePart") then
+		return head
+	end
+	return nil
+end
+
+local function getHumanoid(model)
+	if not model then
+		return nil
+	end
+	return model:FindFirstChildOfClass("Humanoid")
+end
+
+local function saveOriginal(part)
+	if originalParts[part] then
+		return
+	end
+
+	originalParts[part] = {
+		Size = part.Size,
+		Anchored = part.Anchored,
+		CanCollide = part.CanCollide,
+		Massless = part.Massless,
+		Transparency = part.Transparency,
+		CastShadow = part.CastShadow,
+	}
+end
+
+local function restorePart(part)
+	local data = originalParts[part]
+	if not data then
+		return
+	end
+
+	if part and part.Parent then
+		pcall(function()
+			part.Size = data.Size
+			part.Anchored = data.Anchored
+			part.CanCollide = data.CanCollide
+			part.Massless = data.Massless
+			part.Transparency = data.Transparency
+			part.CastShadow = data.CastShadow
+		end)
+	end
+
+	originalParts[part] = nil
+end
+
+local function destroyEsp(model)
+	local gui = espCache[model]
+	if gui then
+		gui:Destroy()
+		espCache[model] = nil
+	end
+end
+
+local function cacheHumanoidNameState(humanoid)
+	local data = {}
+
+	pcall(function()
+		data.DisplayDistanceType = humanoid.DisplayDistanceType
+	end)
+
+	pcall(function()
+		data.NameDisplayDistance = humanoid.NameDisplayDistance
+	end)
+
+	pcall(function()
+		data.NameOcclusion = humanoid.NameOcclusion
+	end)
+
+	return data
+end
+
+local function applyHumanoidNameVisibility(model, hidden)
+	local info = modelInfo[model]
+	if not info then
+		return
+	end
+
+	local humanoid = info.humanoid or getHumanoid(model)
+	if not humanoid then
+		return
+	end
+
+	if not info.humanoidNameCache then
+		info.humanoidNameCache = cacheHumanoidNameState(humanoid)
+	end
+
+	if hidden then
+		pcall(function()
+			humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+		end)
+
+		pcall(function()
+			humanoid.NameDisplayDistance = 0
+		end)
+	else
+		local cache = info.humanoidNameCache
+		if cache then
+			pcall(function()
+				if cache.DisplayDistanceType ~= nil then
+					humanoid.DisplayDistanceType = cache.DisplayDistanceType
+				end
+			end)
+
+			pcall(function()
+				if cache.NameDisplayDistance ~= nil then
+					humanoid.NameDisplayDistance = cache.NameDisplayDistance
+				end
+			end)
+
+			pcall(function()
+				if cache.NameOcclusion ~= nil then
+					humanoid.NameOcclusion = cache.NameOcclusion
+				end
+			end)
+		end
+	end
+end
+
+local function cleanupModel(model)
+	if not modelInfo[model] then
+		return
+	end
+
+	local info = modelInfo[model]
+
+	if info.head then
+		restorePart(info.head)
+	end
+
+	applyHumanoidNameVisibility(model, false)
+	destroyEsp(model)
+
+	if info.connections then
+		for _, conn in ipairs(info.connections) do
+			if conn then
+				conn:Disconnect()
+			end
+		end
+	end
+
+	modelInfo[model] = nil
+	trackedPlayers[model] = nil
+	trackedNPCs[model] = nil
+end
+
+local function applyHitboxToHead(head)
+	if not head or not head:IsA("BasePart") then
+		return
+	end
+
+	saveOriginal(head)
+
+	local sizeValue = clampSize(state.size)
+
+	head.Anchored = false
+	head.CanCollide = false
+	head.Massless = true
+	head.Transparency = 0.5
+	head.Size = Vector3.new(sizeValue, sizeValue, sizeValue)
+end
+
+local function makeBillboard(model, adornee, titleText, healthText)
+	local billboard = Instance.new("BillboardGui")
+	billboard.Name = "JanBloxESP"
+	billboard.AlwaysOnTop = true
+	billboard.Size = UDim2.new(0, 200, 0, 48)
+	billboard.StudsOffset = Vector3.new(0, 2.8, 0)
+	billboard.Adornee = adornee
+	billboard.Parent = adornee
+
+	local frame = Instance.new("Frame")
+	frame.BackgroundTransparency = 1
+	frame.Size = UDim2.new(1, 0, 1, 0)
+	frame.Parent = billboard
+
+	local layout = Instance.new("UIListLayout")
+	layout.FillDirection = Enum.FillDirection.Vertical
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
+	layout.Padding = UDim.new(0, 0)
+	layout.Parent = frame
+
+	local nameLabel = Instance.new("TextLabel")
+	nameLabel.BackgroundTransparency = 1
+	nameLabel.Size = UDim2.new(1, 0, 0, 24)
+	nameLabel.Font = Enum.Font.GothamBold
+	nameLabel.TextSize = 14
+	nameLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+	nameLabel.TextStrokeTransparency = 0.4
+	nameLabel.TextXAlignment = Enum.TextXAlignment.Center
+	nameLabel.Text = titleText
+	nameLabel.Parent = frame
+
+	local hpLabel = Instance.new("TextLabel")
+	hpLabel.BackgroundTransparency = 1
+	hpLabel.Size = UDim2.new(1, 0, 0, 20)
+	hpLabel.Font = Enum.Font.Gotham
+	hpLabel.TextSize = 13
+	hpLabel.TextColor3 = Color3.fromRGB(220, 220, 220)
+	hpLabel.TextStrokeTransparency = 0.45
+	hpLabel.TextXAlignment = Enum.TextXAlignment.Center
+	hpLabel.Text = healthText
+	hpLabel.Parent = frame
+
+	return billboard, nameLabel, hpLabel
+end
+
+local function updateEsp(model)
+	local info = modelInfo[model]
+	if not info then
+		return
+	end
+
+	local humanoid = getHumanoid(model)
+	local head = info.head or getHead(model)
+
+	if info.isPlayer then
+		if not state.playerESP or not info.player or not isEnemyPlayer(info.player) then
+			destroyEsp(model)
+			return
+		end
+	else
+		if not state.npcESP then
+			destroyEsp(model)
+			return
+		end
+	end
+
+	if not head then
+		destroyEsp(model)
+		return
+	end
+
+	local nameText
+	if info.isPlayer and info.player then
+		nameText = info.player.Name
+	else
+		nameText = model.Name
+	end
+
+	local healthText = "Health: ?"
+	if humanoid then
+		local currentHealth = math.max(0, math.floor(humanoid.Health + 0.5))
+		local maxHealth = math.max(1, math.floor(humanoid.MaxHealth + 0.5))
+		healthText = ("Health: %d/%d"):format(currentHealth, maxHealth)
+	end
+
+	local gui = espCache[model]
+	if not gui or not gui.Parent then
+		gui, info.nameLabel, info.hpLabel = makeBillboard(model, head, nameText, healthText)
+		espCache[model] = gui
+	else
+		gui.Adornee = head
+		gui.Parent = head
+		if info.nameLabel then
+			info.nameLabel.Text = nameText
+		end
+		if info.hpLabel then
+			info.hpLabel.Text = healthText
+		end
+	end
+end
+
+local function applyModelEffects(model)
+	local info = modelInfo[model]
+	if not info then
+		return
+	end
+
+	local head = info.head or getHead(model)
+	info.head = head
+
+	if info.isPlayer then
+		applyHumanoidNameVisibility(model, state.playerESP and info.player and isEnemyPlayer(info.player) or false)
+
+		if head then
+			if state.playerHitbox and info.player and isEnemyPlayer(info.player) then
+				applyHitboxToHead(head)
+			else
+				restorePart(head)
+			end
+		end
+	else
+		applyHumanoidNameVisibility(model, state.npcESP)
+
+		if head then
+			if state.npcHitbox then
+				applyHitboxToHead(head)
+			else
+				restorePart(head)
+			end
+		end
+	end
+
+	updateEsp(model)
+end
+
+local function watchModel(model, isPlayer, player)
+	if not model or modelInfo[model] then
+		return
+	end
+
+	local info = {
+		isPlayer = isPlayer,
+		player = player,
+		head = nil,
+		humanoid = getHumanoid(model),
+		humanoidNameCache = nil,
+		connections = {},
+		nameLabel = nil,
+		hpLabel = nil,
+	}
+
+	modelInfo[model] = info
+
+	local function refreshHead()
+		local head = getHead(model)
+		if head and info.head ~= head then
+			if info.head then
+				restorePart(info.head)
+			end
+			info.head = head
+		end
+		applyModelEffects(model)
+	end
+
+	table.insert(info.connections, model.ChildAdded:Connect(function(child)
+		if child.Name == "Head" and child:IsA("BasePart") then
+			refreshHead()
+		end
+	end))
+
+	table.insert(info.connections, model.AncestryChanged:Connect(function(_, parent)
+		if parent == nil then
+			cleanupModel(model)
+		end
+	end))
+
+	local humanoid = info.humanoid
+	if humanoid then
+		table.insert(info.connections, humanoid.HealthChanged:Connect(function()
+			updateEsp(model)
+		end))
+
+		table.insert(info.connections, humanoid.Died:Connect(function()
+			updateEsp(model)
+		end))
+	end
+
+	refreshHead()
+end
+
+local function setupPlayer(player)
+	if trackedPlayers[player] then
+		return
+	end
+
+	trackedPlayers[player] = true
+
+	player.CharacterAdded:Connect(function(character)
+		task.spawn(function()
+			watchModel(character, true, player)
+
+			local head = character:WaitForChild("Head", 6)
+			if head and head:IsA("BasePart") then
+				local info = modelInfo[character]
+				if info then
+					info.head = head
+					applyModelEffects(character)
+				end
+			end
+		end)
+	end)
+
+	player.CharacterRemoving:Connect(function(character)
+		cleanupModel(character)
+	end)
+
+	if player.Character then
+		task.spawn(function()
+			watchModel(player.Character, true, player)
+
+			local head = player.Character:WaitForChild("Head", 6)
+			if head and head:IsA("BasePart") then
+				local info = modelInfo[player.Character]
+				if info then
+					info.head = head
+					applyModelEffects(player.Character)
+				end
+			end
+		end)
+	end
+end
+
+local function setupNPCModel(model)
+	if trackedNPCs[model] then
+		return
+	end
+
+	if Players:GetPlayerFromCharacter(model) then
+		return
+	end
+
+	local humanoid = getHumanoid(model)
+	if not humanoid then
+		return
+	end
+
+	trackedNPCs[model] = true
+	watchModel(model, false, nil)
+
+	table.insert(modelInfo[model].connections, humanoid.HealthChanged:Connect(function()
+		updateEsp(model)
+	end))
+
+	table.insert(modelInfo[model].connections, humanoid.Died:Connect(function()
+		updateEsp(model)
+	end))
+end
+
+local function refreshAll()
+	for player, _ in pairs(trackedPlayers) do
+		if player and player.Character then
+			local info = modelInfo[player.Character]
+			if info then
+				info.head = getHead(player.Character) or info.head
+				applyModelEffects(player.Character)
+			end
+		end
+	end
+
+	for model, _ in pairs(trackedNPCs) do
+		if model and model.Parent then
+			local info = modelInfo[model]
+			if info then
+				info.head = getHead(model) or info.head
+				applyModelEffects(model)
+			end
+		end
+	end
+end
+
+for _, player in ipairs(Players:GetPlayers()) do
+	setupPlayer(player)
+end
+
+Players.PlayerAdded:Connect(setupPlayer)
+
+for _, inst in ipairs(Workspace:GetDescendants()) do
+	if inst:IsA("Humanoid") and inst.Parent and inst.Parent:IsA("Model") then
+		if not Players:GetPlayerFromCharacter(inst.Parent) then
+			setupNPCModel(inst.Parent)
+		end
+	end
+end
+
+Workspace.DescendantAdded:Connect(function(inst)
+	if inst:IsA("Humanoid") and inst.Parent and inst.Parent:IsA("Model") then
+		if not Players:GetPlayerFromCharacter(inst.Parent) then
+			setupNPCModel(inst.Parent)
+		end
+	end
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+	if player.Character then
+		cleanupModel(player.Character)
+	end
+	trackedPlayers[player] = nil
+end)
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = GUI_NAME
+screenGui.ResetOnSpawn = false
+screenGui.IgnoreGuiInset = true
+screenGui.Parent = PlayerGui
+
+local main = Instance.new("Frame")
+main.Name = "Main"
+main.Size = UDim2.new(0, 300, 0, 320)
+main.Position = UDim2.new(0.5, -150, 0.5, -160)
+main.BackgroundColor3 = Color3.fromRGB(24, 24, 24)
+main.BorderSizePixel = 0
+main.ClipsDescendants = false
+main.Parent = screenGui
+
+local mainCorner = Instance.new("UICorner")
+mainCorner.CornerRadius = UDim.new(0, 8)
+mainCorner.Parent = main
+
+local mainStroke = Instance.new("UIStroke")
+mainStroke.Thickness = 1
+mainStroke.Transparency = 0.35
+mainStroke.Parent = main
+
+local topBar = Instance.new("Frame")
+topBar.Size = UDim2.new(1, 0, 0, 34)
+topBar.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+topBar.BorderSizePixel = 0
+topBar.Parent = main
+
+local topCorner = Instance.new("UICorner")
+topCorner.CornerRadius = UDim.new(0, 8)
+topCorner.Parent = topBar
+
+local topCover = Instance.new("Frame")
+topCover.Size = UDim2.new(1, 0, 0, 10)
+topCover.Position = UDim2.new(0, 0, 1, -10)
+topCover.BackgroundColor3 = topBar.BackgroundColor3
+topCover.BorderSizePixel = 0
+topCover.Parent = topBar
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, -12, 1, 0)
+title.Position = UDim2.new(0, 6, 0, 0)
+title.BackgroundTransparency = 1
+title.Text = "JanBlox's Gui"
+title.TextColor3 = Color3.fromRGB(255, 255, 255)
+title.Font = Enum.Font.GothamBold
+title.TextSize = 18
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Parent = topBar
+
+local dragActive = false
+local dragStart
+local startPos
+
+topBar.Active = true
+topBar.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		dragActive = true
+		dragStart = input.Position
+		startPos = main.Position
+
+		input.Changed:Connect(function()
+			if input.UserInputState == Enum.UserInputState.End then
+				dragActive = false
+			end
+		end)
+	end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+	if not dragActive then
+		return
+	end
+
+	if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+		local delta = input.Position - dragStart
+		main.Position = UDim2.new(
+			startPos.X.Scale,
+			startPos.X.Offset + delta.X,
+			startPos.Y.Scale,
+			startPos.Y.Offset + delta.Y
+		)
+	end
+end)
+
+local resizeActive = false
+local resizeStart
+local startSize
+
+local resizeHandle = Instance.new("Frame")
+resizeHandle.Name = "ResizeHandle"
+resizeHandle.Size = UDim2.new(0, 18, 0, 18)
+resizeHandle.AnchorPoint = Vector2.new(1, 1)
+resizeHandle.Position = UDim2.new(1, -2, 1, -2)
+resizeHandle.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+resizeHandle.BorderSizePixel = 0
+resizeHandle.Parent = main
+
+local resizeCorner = Instance.new("UICorner")
+resizeCorner.CornerRadius = UDim.new(0, 4)
+resizeCorner.Parent = resizeHandle
+
+local resizeStroke = Instance.new("UIStroke")
+resizeStroke.Thickness = 1
+resizeStroke.Transparency = 0.45
+resizeStroke.Parent = resizeHandle
+
+resizeHandle.Active = true
+resizeHandle.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		resizeActive = true
+		resizeStart = input.Position
+		startSize = main.Size
+
+		input.Changed:Connect(function()
+			if input.UserInputState == Enum.UserInputState.End then
+				resizeActive = false
+			end
+		end)
+	end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+	if not resizeActive then
+		return
+	end
+
+	if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+		local delta = input.Position - resizeStart
+
+		local newWidth = math.clamp(startSize.X.Offset + delta.X, 280, 700)
+		local newHeight = math.clamp(startSize.Y.Offset + delta.Y, 240, 700)
+
+		main.Size = UDim2.new(0, newWidth, 0, newHeight)
+	end
+end)
+
+local content = Instance.new("ScrollingFrame")
+content.Name = "Content"
+content.Size = UDim2.new(1, -14, 1, -44)
+content.Position = UDim2.new(0, 7, 0, 40)
+content.BackgroundTransparency = 1
+content.BorderSizePixel = 0
+content.ScrollBarThickness = 6
+content.ScrollBarImageColor3 = Color3.fromRGB(120, 120, 120)
+content.CanvasSize = UDim2.new(0, 0, 0, 0)
+content.AutomaticCanvasSize = Enum.AutomaticSize.None
+content.Parent = main
+
+local contentPadding = Instance.new("UIPadding")
+contentPadding.PaddingTop = UDim.new(0, 2)
+contentPadding.PaddingBottom = UDim.new(0, 8)
+contentPadding.PaddingLeft = UDim.new(0, 2)
+contentPadding.PaddingRight = UDim.new(0, 6)
+contentPadding.Parent = content
+
+local layout = Instance.new("UIListLayout")
+layout.Padding = UDim.new(0, 8)
+layout.SortOrder = Enum.SortOrder.LayoutOrder
+layout.Parent = content
+
+local function updateCanvas()
+	content.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 10)
+end
+
+layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(updateCanvas)
+
+local function sectionLabel(text)
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.new(1, 0, 0, 20)
+	label.BackgroundTransparency = 1
+	label.Text = text
+	label.TextColor3 = Color3.fromRGB(235, 235, 235)
+	label.Font = Enum.Font.GothamBold
+	label.TextSize = 15
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.Parent = content
+	return label
+end
+
+local function makeButton(text, height)
+	local button = Instance.new("TextButton")
+	button.Size = UDim2.new(1, 0, 0, height or 34)
+	button.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+	button.BorderSizePixel = 0
+	button.Text = text
+	button.TextColor3 = Color3.fromRGB(255, 255, 255)
+	button.Font = Enum.Font.GothamBold
+	button.TextSize = 15
+	button.AutoButtonColor = true
+	button.Parent = content
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 6)
+	corner.Parent = button
+
+	return button
+end
+
+local function makeSmallButton(parent, text)
+	local button = Instance.new("TextButton")
+	button.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+	button.BorderSizePixel = 0
+	button.Text = text
+	button.TextColor3 = Color3.fromRGB(255, 255, 255)
+	button.Font = Enum.Font.GothamBold
+	button.TextSize = 14
+	button.AutoButtonColor = true
+	button.Parent = parent
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 6)
+	corner.Parent = button
+
+	return button
+end
+
+local hitboxSection = sectionLabel("Hitbox Configuration")
+hitboxSection.LayoutOrder = 1
+
+local hitboxPlayerBtn = makeButton("Toggle Player Hitbox: OFF")
+hitboxPlayerBtn.LayoutOrder = 2
+
+local hitboxNpcBtn = makeButton("Toggle NPC Hitbox: OFF")
+hitboxNpcBtn.LayoutOrder = 3
+
+local sizeRow = Instance.new("Frame")
+sizeRow.Size = UDim2.new(1, 0, 0, 34)
+sizeRow.BackgroundTransparency = 1
+sizeRow.Parent = content
+sizeRow.LayoutOrder = 4
+
+local sizeLayout = Instance.new("UIListLayout")
+sizeLayout.FillDirection = Enum.FillDirection.Horizontal
+sizeLayout.SortOrder = Enum.SortOrder.LayoutOrder
+sizeLayout.Padding = UDim.new(0, 6)
+sizeLayout.Parent = sizeRow
+
+local minusBtn = makeSmallButton(sizeRow, "Size -")
+minusBtn.Size = UDim2.new(0, 60, 1, 0)
+minusBtn.LayoutOrder = 1
+
+local sizeLabel = Instance.new("TextLabel")
+sizeLabel.Size = UDim2.new(1, -132, 1, 0)
+sizeLabel.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+sizeLabel.BorderSizePixel = 0
+sizeLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+sizeLabel.Font = Enum.Font.GothamBold
+sizeLabel.TextSize = 14
+sizeLabel.Text = "Size: 4 / 20"
+sizeLabel.Parent = sizeRow
+sizeLabel.LayoutOrder = 2
+
+local sizeCorner = Instance.new("UICorner")
+sizeCorner.CornerRadius = UDim.new(0, 6)
+sizeCorner.Parent = sizeLabel
+
+local plusBtn = makeSmallButton(sizeRow, "Size +")
+plusBtn.Size = UDim2.new(0, 60, 1, 0)
+plusBtn.LayoutOrder = 3
+
+local espSection = sectionLabel("ESP Configuration")
+espSection.LayoutOrder = 5
+
+local espPlayerBtn = makeButton("Toggle Player ESP: OFF")
+espPlayerBtn.LayoutOrder = 6
+
+local espNpcBtn = makeButton("Toggle NPC ESP: OFF")
+espNpcBtn.LayoutOrder = 7
+
+local function refreshUI()
+	hitboxPlayerBtn.Text = "Toggle Player Hitbox: " .. (state.playerHitbox and "ON" or "OFF")
+	hitboxNpcBtn.Text = "Toggle NPC Hitbox: " .. (state.npcHitbox and "ON" or "OFF")
+	espPlayerBtn.Text = "Toggle Player ESP: " .. (state.playerESP and "ON" or "OFF")
+	espNpcBtn.Text = "Toggle NPC ESP: " .. (state.npcESP and "ON" or "OFF")
+	sizeLabel.Text = "Size: " .. tostring(state.size) .. " / " .. tostring(MAX_SIZE)
+	updateCanvas()
+end
+
+hitboxPlayerBtn.MouseButton1Click:Connect(function()
+	state.playerHitbox = not state.playerHitbox
+	refreshUI()
+	refreshAll()
+end)
+
+hitboxNpcBtn.MouseButton1Click:Connect(function()
+	state.npcHitbox = not state.npcHitbox
+	refreshUI()
+	refreshAll()
+end)
+
+espPlayerBtn.MouseButton1Click:Connect(function()
+	state.playerESP = not state.playerESP
+	refreshUI()
+	refreshAll()
+end)
+
+espNpcBtn.MouseButton1Click:Connect(function()
+	state.npcESP = not state.npcESP
+	refreshUI()
+	refreshAll()
+end)
+
+minusBtn.MouseButton1Click:Connect(function()
+	state.size = clampSize(state.size - STEP_SIZE)
+	_G.HeadSize = state.size
+	_G.RootSize = state.size
+	refreshUI()
+	refreshAll()
+end)
+
+plusBtn.MouseButton1Click:Connect(function()
+	state.size = clampSize(state.size + STEP_SIZE)
+	_G.HeadSize = state.size
+	_G.RootSize = state.size
+	refreshUI()
+	refreshAll()
+end)
+
+refreshUI()
+refreshAll()
+
+task.spawn(function()
+	while screenGui.Parent do
+		task.wait(0.5)
+		refreshAll()
+		for model, info in pairs(modelInfo) do
+			if model and model.Parent and info then
+				updateEsp(model)
+			end
+		end
+	end
+end)
