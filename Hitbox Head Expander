@@ -1,6 +1,7 @@
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
 
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
@@ -26,15 +27,22 @@ local state = {
 	npcHitbox = false,
 	forceFieldHitbox = false,
 
+	-- Player Visuals
 	playerESP = false,
-	npcESP = false,
-	highlightESP = false,
-	boxESP = false,
+	playerHighlight = false,
+	playerBox = false,
 
-	size = 4,
+	-- NPC Visuals
+	npcESP = false,
+	npcHighlight = false,
+	npcBox = false,
+
+	-- Movement & Misc
+	size = 5,
 	walkSpeed = DEFAULT_WALK_SPEED,
 	jumpPower = DEFAULT_JUMP_POWER,
 	layDown = false,
+	isBanging = false,
 	guiVisible = true,
 }
 
@@ -293,32 +301,41 @@ local function applyLocalMovement(character)
 end
 
 local function performBang()
-    local target = nil
     local mouse = LocalPlayer:GetMouse()
-    local targetDist = 100
+    local targetChar = nil
+    local targetDist = 50
     
     for _, player in pairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
             local dist = (player.Character.HumanoidRootPart.Position - mouse.Hit.Position).Magnitude
             if dist < targetDist then
                 targetDist = dist
-                target = player.Character
+                targetChar = player.Character
             end
         end
     end
 
-    if target and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+    if targetChar and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
         state.isBanging = not state.isBanging
+        local humRoot = LocalPlayer.Character.HumanoidRootPart
+        
         task.spawn(function()
-            local humRoot = LocalPlayer.Character.HumanoidRootPart
-            while state.isBanging and target.Parent and humRoot.Parent do
-                local targetPos = target.HumanoidRootPart.CFrame
-                humRoot.CFrame = targetPos * CFrame.new(0, 0, 1.2)
-                task.wait(0.2)
-                humRoot.CFrame = targetPos * CFrame.new(0, 0, 0.5)
-                task.wait(0.2)
+            while state.isBanging and targetChar.Parent and humRoot.Parent do
+                local targetCFrame = targetChar.HumanoidRootPart.CFrame
+                
+                local info = TweenInfo.new(0.3, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+                
+                local forwardTween = TweenService:Create(humRoot, info, {CFrame = targetCFrame * CFrame.new(0, 0, 1.2)})
+                forwardTween:Play()
+                forwardTween.Completed:Wait()
+                
+                local backwardTween = TweenService:Create(humRoot, info, {CFrame = targetCFrame * CFrame.new(0, 0, 0.2)})
+                backwardTween:Play()
+                backwardTween.Completed:Wait()
             end
         end)
+    else
+        state.isBanging = false
     end
 end
 
@@ -457,18 +474,17 @@ local function makeBox(model)
 end
 
 local function shouldShowCategory(info)
-    if info.isPlayer and info.player == LocalPlayer then
-        return false
-    end
+    if info.isPlayer and info.player == LocalPlayer then return false end
     
-    if info.isPlayer and info.player.Team ~= nil and info.player.Team == LocalPlayer.Team then
-        return false
+    if info.isPlayer and info.player.Team and LocalPlayer.Team and info.player.Team == LocalPlayer.Team then 
+        return false 
     end
 
     if info.isPlayer then
-        return state.playerESP or state.highlightESP or state.boxESP
+        return (state.playerESP and "ESP") or (state.highlightESP and "Highlight") or (state.boxESP and "Box")
+    else
+        return (state.npcESP and "ESP") or (state.npcHighlightESP and "Highlight") or (state.npcBoxESP and "Box")
     end
-    return state.npcESP or state.highlightESP or state.boxESP
 end
 
 local function shouldShowNameBillboard(info)
@@ -561,32 +577,35 @@ local function updateVisuals(model)
 		destroyEsp(model)
 	end
 
-	if dead then
-		destroyHighlight(model)
-		destroyBox(model)
-		return
-	end
+    if dead then
+        destroyHighlight(model)
+        destroyBox(model)
+        return
+    end
 
-	if state.highlightESP then
-		if not info.highlight or not info.highlight.Parent then
-			info.highlight = makeHighlight(model)
-		else
-			info.highlight.Adornee = model
-		end
-	else
-		destroyHighlight(model)
-	end
+    local useHighlight = info.isPlayer and state.playerHighlight or state.npcHighlight
+    local useBox = info.isPlayer and state.playerBox or state.npcBox
 
-	if state.boxESP and root then
-		if not info.box or not info.box.Parent then
-			info.box = makeBox(model)
-		else
-			info.box.Adornee = root
-			info.box.Size = model:GetExtentsSize()
-		end
-	else
-		destroyBox(model)
-	end
+    if useHighlight then
+        if not info.highlight or not info.highlight.Parent then
+            info.highlight = makeHighlight(model)
+        else
+            info.highlight.Adornee = model
+        end
+    else
+        destroyHighlight(model)
+    end
+
+    if useBox and root then
+        if not info.box or not info.box.Parent then
+            info.box = makeBox(model)
+        else
+            info.box.Adornee = root
+            info.box.Size = model:GetExtentsSize()
+        end
+    else
+        destroyBox(model)
+    end
 end
 
 local function applyModelEffects(model)
@@ -1018,7 +1037,7 @@ sizeLabel.BorderSizePixel = 0
 sizeLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
 sizeLabel.Font = Enum.Font.GothamBold
 sizeLabel.TextSize = 14
-sizeLabel.Text = "Size: 4 / 20"
+sizeLabel.Text = "Size: 5 / 50"
 sizeLabel.Parent = sizeRow
 sizeLabel.LayoutOrder = 2
 
@@ -1033,17 +1052,23 @@ plusBtn.LayoutOrder = 3
 local espSection = sectionLabel("ESP Configuration")
 espSection.LayoutOrder = 7
 
-local espPlayerBtn = makeButton("Toggle Player ESP: OFF")
+local espPlayerBtn = makeButton("Player ESP: OFF")
 espPlayerBtn.LayoutOrder = 8
 
-local espNpcBtn = makeButton("Toggle NPC ESP: OFF")
-espNpcBtn.LayoutOrder = 9
+local playerHighlightBtn = makeButton("Player Highlight: OFF")
+playerHighlightBtn.LayoutOrder = 9
 
-local highlightBtn = makeButton("Toggle Highlight: OFF")
-highlightBtn.LayoutOrder = 10
+local playerBoxBtn = makeButton("Player Boxes: OFF")
+playerBoxBtn.LayoutOrder = 10
 
-local boxBtn = makeButton("Toggle 2D Boxes: OFF")
-boxBtn.LayoutOrder = 11
+local espNpcBtn = makeButton("NPC ESP: OFF")
+espNpcBtn.LayoutOrder = 11
+
+local npcHighlightBtn = makeButton("NPC Highlight: OFF")
+npcHighlightBtn.LayoutOrder = 12
+
+local npcBoxBtn = makeButton("NPC Boxes: OFF")
+npcBoxBtn.LayoutOrder = 13
 
 local playerSection = sectionLabel("Player Configuration")
 playerSection.LayoutOrder = 12
@@ -1180,27 +1205,39 @@ forceFieldBtn.MouseButton1Click:Connect(function()
 end)
 
 espPlayerBtn.MouseButton1Click:Connect(function()
-	state.playerESP = not state.playerESP
-	refreshUI()
-	refreshAll()
+    state.playerESP = not state.playerESP
+    refreshUI()
+    refreshAll()
+end)
+
+playerHighlightBtn.MouseButton1Click:Connect(function()
+    state.playerHighlight = not state.playerHighlight
+    refreshUI()
+    refreshAll()
+end)
+
+playerBoxBtn.MouseButton1Click:Connect(function()
+    state.playerBox = not state.playerBox
+    refreshUI()
+    refreshAll()
 end)
 
 espNpcBtn.MouseButton1Click:Connect(function()
-	state.npcESP = not state.npcESP
-	refreshUI()
-	refreshAll()
+    state.npcESP = not state.npcESP
+    refreshUI()
+    refreshAll()
 end)
 
-highlightBtn.MouseButton1Click:Connect(function()
-	state.highlightESP = not state.highlightESP
-	refreshUI()
-	refreshAll()
+npcHighlightBtn.MouseButton1Click:Connect(function()
+    state.npcHighlight = not state.npcHighlight
+    refreshUI()
+    refreshAll()
 end)
 
-boxBtn.MouseButton1Click:Connect(function()
-	state.boxESP = not state.boxESP
-	refreshUI()
-	refreshAll()
+npcBoxBtn.MouseButton1Click:Connect(function()
+    state.npcBox = not state.npcBox
+    refreshUI()
+    refreshAll()
 end)
 
 minusBtn.MouseButton1Click:Connect(function()
