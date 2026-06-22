@@ -46,6 +46,7 @@ local trackedPlayers = {}
 local trackedNPCs = {}
 local modelInfo = {}
 local espCache = {}
+state.isBanging = false
 
 local function isMobile()
 	return UserInputService.TouchEnabled and not UserInputService.MouseEnabled
@@ -276,20 +277,48 @@ local function applyLocalMovement(character)
     pcall(function() humanoid.JumpPower = state.jumpPower end)
 
     local info = modelInfo[character]
-    if info and rootPart then
+    if info then
         info.baseHipHeight = info.baseHipHeight or humanoid.HipHeight
         
         if state.layDown then
             if humanoid.RigType == Enum.HumanoidRigType.R15 then
                 pcall(function() humanoid.HipHeight = math.max(0, info.baseHipHeight - LAY_DOWN_OFFSET) end)
             else
-                rootPart.CFrame = rootPart.CFrame * CFrame.Angles(math.rad(80), 0, 0)
+                pcall(function() humanoid.HipHeight = -2 end)
             end
         else
-            if humanoid.RigType == Enum.HumanoidRigType.R15 then
-                pcall(function() humanoid.HipHeight = info.baseHipHeight end)
+            pcall(function() humanoid.HipHeight = info.baseHipHeight end)
+        end
+    end
+end
+
+local function performBang()
+    local target = nil
+    local mouse = LocalPlayer:GetMouse()
+    local targetDist = 100
+    
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+            local dist = (player.Character.HumanoidRootPart.Position - mouse.Hit.Position).Magnitude
+            if dist < targetDist then
+                targetDist = dist
+                target = player.Character
             end
         end
+    end
+
+    if target and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+        state.isBanging = not state.isBanging
+        task.spawn(function()
+            local humRoot = LocalPlayer.Character.HumanoidRootPart
+            while state.isBanging and target.Parent and humRoot.Parent do
+                local targetPos = target.HumanoidRootPart.CFrame
+                humRoot.CFrame = targetPos * CFrame.new(0, 0, 1.2)
+                task.wait(0.2)
+                humRoot.CFrame = targetPos * CFrame.new(0, 0, 0.5)
+                task.wait(0.2)
+            end
+        end)
     end
 end
 
@@ -429,6 +458,10 @@ end
 
 local function shouldShowCategory(info)
     if info.isPlayer and info.player == LocalPlayer then
+        return false
+    end
+    
+    if info.isPlayer and info.player.Team ~= nil and info.player.Team == LocalPlayer.Team then
         return false
     end
 
@@ -1216,6 +1249,19 @@ resetMovementBtn.MouseButton1Click:Connect(function()
 	state.layDown = false
 	applyMovementToCurrentCharacter()
 	refreshUI()
+end)
+
+local bangBtn = makeButton("Bang: OFF")
+bangBtn.LayoutOrder = 17
+
+bangBtn.MouseButton1Click:Connect(function()
+    if not state.isBanging then
+        performBang()
+        bangBtn.Text = "Bang: ON"
+    else
+        state.isBanging = false
+        bangBtn.Text = "Bang: OFF"
+    end
 end)
 
 layDownBtn.MouseButton1Click:Connect(function()
