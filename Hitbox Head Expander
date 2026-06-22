@@ -1290,29 +1290,29 @@ bangBtn.MouseButton1Click:Connect(function()
 end)
 
 local function refreshUI()
-	-- Hitboxes
-	toggleHitboxesBtn.Text = "Toggle Hitboxes: " .. (state.hitboxesEnabled and "ON" or "OFF")
-	playerHitboxBtn.Text = "Toggle Player Hitbox: " .. (state.playerHitbox and "ON" or "OFF")
-	npcHitboxBtn.Text = "Toggle NPC Hitbox: " .. (state.npcHitbox and "ON" or "OFF")
-	forceFieldBtn.Text = "Toggle ForceField: " .. (state.forceFieldHitbox and "ON" or "OFF")
+    -- Hitboxes
+    toggleHitboxesBtn.Text = "Toggle Hitboxes: " .. (state.hitboxesEnabled and "ON" or "OFF")
+    playerHitboxBtn.Text = "Toggle Player Hitbox: " .. (state.playerHitbox and "ON" or "OFF")
+    npcHitboxBtn.Text = "Toggle NPC Hitbox: " .. (state.npcHitbox and "ON" or "OFF")
+    forceFieldBtn.Text = "Toggle ForceField: " .. (state.forceFieldHitbox and "ON" or "OFF")
 
-	-- New ESP/Highlight/Box Buttons
-	espPlayerBtn.Text = "Player ESP: " .. (state.playerESP and "ON" or "OFF")
-	playerHighlightBtn.Text = "Player Highlight: " .. (state.playerHighlight and "ON" or "OFF")
-	playerBoxBtn.Text = "Player Boxes: " .. (state.playerBox and "ON" or "OFF")
-	
-	espNpcBtn.Text = "NPC ESP: " .. (state.npcESP and "ON" or "OFF")
-	npcHighlightBtn.Text = "NPC Highlight: " .. (state.npcHighlight and "ON" or "OFF")
-	npcBoxBtn.Text = "NPC Boxes: " .. (state.npcBox and "ON" or "OFF")
+    -- ESP & Visuals
+    espPlayerBtn.Text = "Player ESP: " .. (state.playerESP and "ON" or "OFF")
+    playerHighlightBtn.Text = "Player Highlight: " .. (state.playerHighlight and "ON" or "OFF")
+    playerBoxBtn.Text = "Player Boxes: " .. (state.playerBox and "ON" or "OFF")
+    
+    espNpcBtn.Text = "NPC ESP: " .. (state.npcESP and "ON" or "OFF")
+    npcHighlightBtn.Text = "NPC Highlight: " .. (state.npcHighlight and "ON" or "OFF")
+    npcBoxBtn.Text = "NPC Boxes: " .. (state.npcBox and "ON" or "OFF")
 
-	-- Misc
-	sizeLabel.Text = "Size: " .. tostring(state.size) .. " / " .. tostring(MAX_SIZE)
-	speedLabel.Text = "WalkSpeed: " .. tostring(state.walkSpeed)
-	jumpLabel.Text = "JumpPower: " .. tostring(state.jumpPower)
-	layDownBtn.Text = "Lay Down: " .. (state.layDown and "ON" or "OFF")
-	bangBtn.Text = "Bang: " .. (state.isBanging and "ON" or "OFF")
+    -- Stats & Misc
+    sizeLabel.Text = "Size: " .. tostring(state.size) .. " / " .. tostring(MAX_SIZE)
+    speedLabel.Text = "WalkSpeed: " .. tostring(state.walkSpeed)
+    jumpLabel.Text = "JumpPower: " .. tostring(state.jumpPower)
+    layDownBtn.Text = "Lay Down: " .. (state.layDown and "ON" or "OFF")
+    bangBtn.Text = "Bang: " .. (state.isBanging and "ON" or "OFF")
 
-	updateCanvas()
+    updateCanvas()
 end
 
 if isMobile() then
