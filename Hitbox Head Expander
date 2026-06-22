@@ -266,40 +266,31 @@ local function applyHumanoidNameVisibility(model, hidden)
 end
 
 local function applyLocalMovement(character)
-	if not character then
-		return
-	end
+    if not character then return end
+    local humanoid = getHumanoid(character)
+    local rootPart = getRootPart(character)
+    if not humanoid then return end
 
-	local humanoid = getHumanoid(character)
-	if not humanoid then
-		return
-	end
+    pcall(function() humanoid.WalkSpeed = state.walkSpeed end)
+    pcall(function() humanoid.UseJumpPower = true end)
+    pcall(function() humanoid.JumpPower = state.jumpPower end)
 
-	pcall(function()
-		humanoid.WalkSpeed = state.walkSpeed
-	end)
-
-	pcall(function()
-		humanoid.UseJumpPower = true
-	end)
-
-	pcall(function()
-		humanoid.JumpPower = state.jumpPower
-	end)
-
-	local info = modelInfo[character]
-	if info then
-		info.baseHipHeight = info.baseHipHeight or humanoid.HipHeight
-		if state.layDown then
-			pcall(function()
-				humanoid.HipHeight = math.max(0, info.baseHipHeight - LAY_DOWN_OFFSET)
-			end)
-		else
-			pcall(function()
-				humanoid.HipHeight = info.baseHipHeight
-			end)
-		end
-	end
+    local info = modelInfo[character]
+    if info and rootPart then
+        info.baseHipHeight = info.baseHipHeight or humanoid.HipHeight
+        
+        if state.layDown then
+            if humanoid.RigType == Enum.HumanoidRigType.R15 then
+                pcall(function() humanoid.HipHeight = math.max(0, info.baseHipHeight - LAY_DOWN_OFFSET) end)
+            else
+                rootPart.CFrame = rootPart.CFrame * CFrame.Angles(math.rad(80), 0, 0)
+            end
+        else
+            if humanoid.RigType == Enum.HumanoidRigType.R15 then
+                pcall(function() humanoid.HipHeight = info.baseHipHeight end)
+            end
+        end
+    end
 end
 
 local function applyLayoutForCharacter(character)
@@ -437,10 +428,14 @@ local function makeBox(model)
 end
 
 local function shouldShowCategory(info)
-	if info.isPlayer then
-		return state.playerESP or state.highlightESP or state.boxESP
-	end
-	return state.npcESP or state.highlightESP or state.boxESP
+    if info.isPlayer and info.player == LocalPlayer then
+        return false
+    end
+
+    if info.isPlayer then
+        return state.playerESP or state.highlightESP or state.boxESP
+    end
+    return state.npcESP or state.highlightESP or state.boxESP
 end
 
 local function shouldShowNameBillboard(info)
