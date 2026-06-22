@@ -1,7 +1,6 @@
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local UserInputService = game:GetService("UserInputService")
-local TweenService = game:GetService("TweenService")
 
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
@@ -14,7 +13,7 @@ if oldGui then
 end
 
 local MIN_SIZE = 1
-local MAX_SIZE = 50
+local MAX_SIZE = 20
 local STEP_SIZE = 1
 
 local DEFAULT_WALK_SPEED = 16
@@ -27,22 +26,15 @@ local state = {
 	npcHitbox = false,
 	forceFieldHitbox = false,
 
-	-- Player Visuals
 	playerESP = false,
-	playerHighlight = false,
-	playerBox = false,
-
-	-- NPC Visuals
 	npcESP = false,
-	npcHighlight = false,
-	npcBox = false,
+	highlightESP = false,
+	boxESP = false,
 
-	-- Movement & Misc
-	size = 5,
+	size = 4,
 	walkSpeed = DEFAULT_WALK_SPEED,
 	jumpPower = DEFAULT_JUMP_POWER,
 	layDown = false,
-	isBanging = false,
 	guiVisible = true,
 }
 
@@ -54,7 +46,6 @@ local trackedPlayers = {}
 local trackedNPCs = {}
 local modelInfo = {}
 local espCache = {}
-state.isBanging = false
 
 local function isMobile()
 	return UserInputService.TouchEnabled and not UserInputService.MouseEnabled
@@ -275,68 +266,46 @@ local function applyHumanoidNameVisibility(model, hidden)
 end
 
 local function applyLocalMovement(character)
-    if not character then return end
-    local humanoid = getHumanoid(character)
-    local rootPart = getRootPart(character)
-    if not humanoid then return end
+	if not character then
+		return
+	end
 
-    pcall(function() humanoid.WalkSpeed = state.walkSpeed end)
-    pcall(function() humanoid.UseJumpPower = true end)
-    pcall(function() humanoid.JumpPower = state.jumpPower end)
+	local humanoid = getHumanoid(character)
+	if not humanoid then
+		return
+	end
 
-    local info = modelInfo[character]
-    if info then
-        info.baseHipHeight = info.baseHipHeight or humanoid.HipHeight
-        
-        if state.layDown then
-            if humanoid.RigType == Enum.HumanoidRigType.R15 then
-                pcall(function() humanoid.HipHeight = math.max(0, info.baseHipHeight - LAY_DOWN_OFFSET) end)
-            else
-                pcall(function() humanoid.HipHeight = -2 end)
-            end
-        else
-            pcall(function() humanoid.HipHeight = info.baseHipHeight end)
-        end
-    end
-end
+	pcall(function()
+		humanoid.WalkSpeed = state.walkSpeed
+	end)
 
-local function performBang()
-    local mouse = LocalPlayer:GetMouse()
-    local targetChar = nil
-    local targetDist = 50
-    
-    for _, player in pairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
-            local dist = (player.Character.HumanoidRootPart.Position - mouse.Hit.Position).Magnitude
-            if dist < targetDist then
-                targetDist = dist
-                targetChar = player.Character
-            end
-        end
-    end
+	pcall(function()
+		humanoid.UseJumpPower = true
+	end)
 
-    if targetChar and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
-        state.isBanging = not state.isBanging
-        local humRoot = LocalPlayer.Character.HumanoidRootPart
-        
-        task.spawn(function()
-            while state.isBanging and targetChar.Parent and humRoot.Parent do
-                local targetCFrame = targetChar.HumanoidRootPart.CFrame
-                
-                local info = TweenInfo.new(0.3, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
-                
-                local forwardTween = TweenService:Create(humRoot, info, {CFrame = targetCFrame * CFrame.new(0, 0, 1.2)})
-                forwardTween:Play()
-                forwardTween.Completed:Wait()
-                
-                local backwardTween = TweenService:Create(humRoot, info, {CFrame = targetCFrame * CFrame.new(0, 0, 0.2)})
-                backwardTween:Play()
-                backwardTween.Completed:Wait()
-            end
-        end)
-    else
-        state.isBanging = false
-    end
+	pcall(function()
+		humanoid.JumpPower = state.jumpPower
+	end)
+
+	local info = modelInfo[character]
+	if info then
+		info.baseHipHeight = info.baseHipHeight or humanoid.HipHeight
+
+		local layDownOffset = LAY_DOWN_OFFSET
+		if humanoid.RigType == Enum.HumanoidRigType.R6 then
+			layDownOffset = -2
+		end
+
+		if state.layDown then
+			pcall(function()
+				humanoid.HipHeight = info.baseHipHeight - layDownOffset
+			end)
+		else
+			pcall(function()
+				humanoid.HipHeight = info.baseHipHeight
+			end)
+		end
+	end
 end
 
 local function applyLayoutForCharacter(character)
@@ -474,24 +443,19 @@ local function makeBox(model)
 end
 
 local function shouldShowCategory(info)
-    if info.isPlayer and info.player == LocalPlayer then return false end
-    
-    if info.isPlayer and info.player.Team and LocalPlayer.Team and info.player.Team == LocalPlayer.Team then 
-        return false 
-    end
-
-    if info.isPlayer then
-        return (state.playerESP and "ESP") or (state.highlightESP and "Highlight") or (state.boxESP and "Box")
-    else
-        return (state.npcESP and "ESP") or (state.npcHighlightESP and "Highlight") or (state.npcBoxESP and "Box")
-    end
-end
-
-local function shouldShowNameBillboard(info)
 	if info.isPlayer then
-		return state.playerESP
+		if not info.player or info.player == LocalPlayer then
+			return false
+		end
+
+		if LocalPlayer.Team and info.player.Team and LocalPlayer.Team == info.player.Team then
+			return false
+		end
+
+		return state.playerESP or state.highlightESP or state.boxESP
 	end
-	return state.npcESP
+
+	return state.npcESP or state.highlightESP or state.boxESP
 end
 
 local function shouldApplyHitbox(model, info)
@@ -577,35 +541,32 @@ local function updateVisuals(model)
 		destroyEsp(model)
 	end
 
-    if dead then
-        destroyHighlight(model)
-        destroyBox(model)
-        return
-    end
+	if dead then
+		destroyHighlight(model)
+		destroyBox(model)
+		return
+	end
 
-    local useHighlight = info.isPlayer and state.playerHighlight or state.npcHighlight
-    local useBox = info.isPlayer and state.playerBox or state.npcBox
+	if state.highlightESP then
+		if not info.highlight or not info.highlight.Parent then
+			info.highlight = makeHighlight(model)
+		else
+			info.highlight.Adornee = model
+		end
+	else
+		destroyHighlight(model)
+	end
 
-    if useHighlight then
-        if not info.highlight or not info.highlight.Parent then
-            info.highlight = makeHighlight(model)
-        else
-            info.highlight.Adornee = model
-        end
-    else
-        destroyHighlight(model)
-    end
-
-    if useBox and root then
-        if not info.box or not info.box.Parent then
-            info.box = makeBox(model)
-        else
-            info.box.Adornee = root
-            info.box.Size = model:GetExtentsSize()
-        end
-    else
-        destroyBox(model)
-    end
+	if state.boxESP and root then
+		if not info.box or not info.box.Parent then
+			info.box = makeBox(model)
+		else
+			info.box.Adornee = root
+			info.box.Size = model:GetExtentsSize()
+		end
+	else
+		destroyBox(model)
+	end
 end
 
 local function applyModelEffects(model)
@@ -1037,7 +998,7 @@ sizeLabel.BorderSizePixel = 0
 sizeLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
 sizeLabel.Font = Enum.Font.GothamBold
 sizeLabel.TextSize = 14
-sizeLabel.Text = "Size: 5 / 50"
+sizeLabel.Text = "Size: 4 / 20"
 sizeLabel.Parent = sizeRow
 sizeLabel.LayoutOrder = 2
 
@@ -1052,32 +1013,26 @@ plusBtn.LayoutOrder = 3
 local espSection = sectionLabel("ESP Configuration")
 espSection.LayoutOrder = 7
 
-local espPlayerBtn = makeButton("Player ESP: OFF")
+local espPlayerBtn = makeButton("Toggle Player ESP: OFF")
 espPlayerBtn.LayoutOrder = 8
 
-local playerHighlightBtn = makeButton("Player Highlight: OFF")
-playerHighlightBtn.LayoutOrder = 9
+local espNpcBtn = makeButton("Toggle NPC ESP: OFF")
+espNpcBtn.LayoutOrder = 9
 
-local playerBoxBtn = makeButton("Player Boxes: OFF")
-playerBoxBtn.LayoutOrder = 10
+local highlightBtn = makeButton("Toggle Highlight: OFF")
+highlightBtn.LayoutOrder = 10
 
-local espNpcBtn = makeButton("NPC ESP: OFF")
-espNpcBtn.LayoutOrder = 11
-
-local npcHighlightBtn = makeButton("NPC Highlight: OFF")
-npcHighlightBtn.LayoutOrder = 12
-
-local npcBoxBtn = makeButton("NPC Boxes: OFF")
-npcBoxBtn.LayoutOrder = 13
+local boxBtn = makeButton("Toggle 2D Boxes: OFF")
+boxBtn.LayoutOrder = 11
 
 local playerSection = sectionLabel("Player Configuration")
-playerSection.LayoutOrder = 14
+playerSection.LayoutOrder = 12
 
 local speedRow = Instance.new("Frame")
 speedRow.Size = UDim2.new(1, 0, 0, 34)
 speedRow.BackgroundTransparency = 1
 speedRow.Parent = content
-speedRow.LayoutOrder = 15
+speedRow.LayoutOrder = 13
 
 local speedLayout = Instance.new("UIListLayout")
 speedLayout.FillDirection = Enum.FillDirection.Horizontal
@@ -1112,7 +1067,7 @@ local jumpRow = Instance.new("Frame")
 jumpRow.Size = UDim2.new(1, 0, 0, 34)
 jumpRow.BackgroundTransparency = 1
 jumpRow.Parent = content
-jumpRow.LayoutOrder = 16
+jumpRow.LayoutOrder = 14
 
 local jumpLayout = Instance.new("UIListLayout")
 jumpLayout.FillDirection = Enum.FillDirection.Horizontal
@@ -1144,13 +1099,29 @@ jumpPlus.Size = UDim2.new(0, 70, 1, 0)
 jumpPlus.LayoutOrder = 3
 
 local resetMovementBtn = makeButton("Reset WalkSpeed and JumpPower")
-resetMovementBtn.LayoutOrder = 17
+resetMovementBtn.LayoutOrder = 15
 
 local layDownBtn = makeButton("Lay Down: OFF")
-layDownBtn.LayoutOrder = 18
+layDownBtn.LayoutOrder = 16
 
-local bangBtn = makeButton("Bang: OFF")
-bangBtn.LayoutOrder = 19
+local function refreshUI()
+	toggleHitboxesBtn.Text = "Toggle Hitboxes: " .. (state.hitboxesEnabled and "ON" or "OFF")
+	playerHitboxBtn.Text = "Toggle Player Hitbox: " .. (state.playerHitbox and "ON" or "OFF")
+	npcHitboxBtn.Text = "Toggle NPC Hitbox: " .. (state.npcHitbox and "ON" or "OFF")
+	forceFieldBtn.Text = "Toggle ForceField: " .. (state.forceFieldHitbox and "ON" or "OFF")
+
+	espPlayerBtn.Text = "Toggle Player ESP: " .. (state.playerESP and "ON" or "OFF")
+	espNpcBtn.Text = "Toggle NPC ESP: " .. (state.npcESP and "ON" or "OFF")
+	highlightBtn.Text = "Toggle Highlight: " .. (state.highlightESP and "ON" or "OFF")
+	boxBtn.Text = "Toggle 2D Boxes: " .. (state.boxESP and "ON" or "OFF")
+
+	sizeLabel.Text = "Size: " .. tostring(state.size) .. " / " .. tostring(MAX_SIZE)
+	speedLabel.Text = "WalkSpeed: " .. tostring(state.walkSpeed)
+	jumpLabel.Text = "JumpPower: " .. tostring(state.jumpPower)
+	layDownBtn.Text = "Lay Down: " .. (state.layDown and "ON" or "OFF")
+
+	updateCanvas()
+end
 
 local function applyMovementToCurrentCharacter()
 	local character = LocalPlayer.Character
@@ -1189,39 +1160,27 @@ forceFieldBtn.MouseButton1Click:Connect(function()
 end)
 
 espPlayerBtn.MouseButton1Click:Connect(function()
-    state.playerESP = not state.playerESP
-    refreshUI()
-    refreshAll()
-end)
-
-playerHighlightBtn.MouseButton1Click:Connect(function()
-    state.playerHighlight = not state.playerHighlight
-    refreshUI()
-    refreshAll()
-end)
-
-playerBoxBtn.MouseButton1Click:Connect(function()
-    state.playerBox = not state.playerBox
-    refreshUI()
-    refreshAll()
+	state.playerESP = not state.playerESP
+	refreshUI()
+	refreshAll()
 end)
 
 espNpcBtn.MouseButton1Click:Connect(function()
-    state.npcESP = not state.npcESP
-    refreshUI()
-    refreshAll()
+	state.npcESP = not state.npcESP
+	refreshUI()
+	refreshAll()
 end)
 
-npcHighlightBtn.MouseButton1Click:Connect(function()
-    state.npcHighlight = not state.npcHighlight
-    refreshUI()
-    refreshAll()
+highlightBtn.MouseButton1Click:Connect(function()
+	state.highlightESP = not state.highlightESP
+	refreshUI()
+	refreshAll()
 end)
 
-npcBoxBtn.MouseButton1Click:Connect(function()
-    state.npcBox = not state.npcBox
-    refreshUI()
-    refreshAll()
+boxBtn.MouseButton1Click:Connect(function()
+	state.boxESP = not state.boxESP
+	refreshUI()
+	refreshAll()
 end)
 
 minusBtn.MouseButton1Click:Connect(function()
@@ -1278,42 +1237,6 @@ layDownBtn.MouseButton1Click:Connect(function()
 	refreshUI()
 	refreshAll()
 end)
-
-bangBtn.MouseButton1Click:Connect(function()
-    if not state.isBanging then
-        performBang()
-        bangBtn.Text = "Bang: ON"
-    else
-        state.isBanging = false
-        bangBtn.Text = "Bang: OFF"
-    end
-end)
-
-local function refreshUI()
-    -- Hitboxes
-    toggleHitboxesBtn.Text = "Toggle Hitboxes: " .. (state.hitboxesEnabled and "ON" or "OFF")
-    playerHitboxBtn.Text = "Toggle Player Hitbox: " .. (state.playerHitbox and "ON" or "OFF")
-    npcHitboxBtn.Text = "Toggle NPC Hitbox: " .. (state.npcHitbox and "ON" or "OFF")
-    forceFieldBtn.Text = "Toggle ForceField: " .. (state.forceFieldHitbox and "ON" or "OFF")
-
-    -- ESP & Visuals
-    espPlayerBtn.Text = "Player ESP: " .. (state.playerESP and "ON" or "OFF")
-    playerHighlightBtn.Text = "Player Highlight: " .. (state.playerHighlight and "ON" or "OFF")
-    playerBoxBtn.Text = "Player Boxes: " .. (state.playerBox and "ON" or "OFF")
-    
-    espNpcBtn.Text = "NPC ESP: " .. (state.npcESP and "ON" or "OFF")
-    npcHighlightBtn.Text = "NPC Highlight: " .. (state.npcHighlight and "ON" or "OFF")
-    npcBoxBtn.Text = "NPC Boxes: " .. (state.npcBox and "ON" or "OFF")
-
-    -- Stats & Misc
-    sizeLabel.Text = "Size: " .. tostring(state.size) .. " / " .. tostring(MAX_SIZE)
-    speedLabel.Text = "WalkSpeed: " .. tostring(state.walkSpeed)
-    jumpLabel.Text = "JumpPower: " .. tostring(state.jumpPower)
-    layDownBtn.Text = "Lay Down: " .. (state.layDown and "ON" or "OFF")
-    bangBtn.Text = "Bang: " .. (state.isBanging and "ON" or "OFF")
-
-    updateCanvas()
-end
 
 if isMobile() then
 	local toggleButton = Instance.new("TextButton")
